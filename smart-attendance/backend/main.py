@@ -195,22 +195,23 @@ async def register_student(
 
     # Update batch-level embeddings
     batch_embeddings_path = f"{BASE_DIR}/batches/{batch_number}/{program}/batch_embeddings.pkl"
-    all_embeddings = {}
+   
+    all_embeddings = ([], [])
 
     if os.path.exists(batch_embeddings_path):
         with open(batch_embeddings_path, "rb") as f:
             all_embeddings = pickle.load(f)
 
-    # Add the student's embeddings to the batch-level embeddings
-    all_embeddings[rollno] = stored_embeddings
+    current_embeddings, current_rollnos = all_embeddings
+
+    current_embeddings.extend(stored_embeddings)
+    current_rollnos.extend(rollnos)
 
     # Save the updated batch embeddings
     with open(batch_embeddings_path, "wb") as f:
-        pickle.dump(all_embeddings, f)
+        pickle.dump((current_embeddings, current_rollnos), f)
 
     return {"message": f"Student {name} (Roll No: {rollno}) registered successfully in Batch {batch_number} for {program}."}
-
-
 
 
 def extract_faces(image):
