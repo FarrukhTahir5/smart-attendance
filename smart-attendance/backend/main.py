@@ -1,5 +1,6 @@
+import time
 from fastapi import FastAPI, UploadFile, File, Form
-from typing import List, Optional
+from typing import List
 import os
 import cv2
 import numpy as np
@@ -7,11 +8,18 @@ from mtcnn import MTCNN
 from keras_facenet import FaceNet
 from datetime import datetime
 import pickle
-import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from openpyxl import Workbook,load_workbook
 import datetime
+import asyncio
+import logging
+import pickle
+from typing import List
+
+# Set up logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 from fastapi.staticfiles import StaticFiles
 
@@ -30,40 +38,6 @@ os.makedirs(BASE_DIR, exist_ok=True)
 attendance_static_dir = os.path.join(BASE_DIR, "attendance")
 os.makedirs(attendance_static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=attendance_static_dir), name="static")
-
-@app.get("/dropdown-data")
-async def dropdown_data():
-    data = {
-        "departments": {
-            "Computer Science": {
-                "programs": {
-                    "BS CS": ["Fall 2020", "Spring 2021"],
-                    "MS CS": ["Spring 2021"]
-                },
-                "classes": {
-                    "Fall 2020": [
-                        "CS101 - Group A - Dr. Smith",
-                        "CS101 - Group B - Dr. Jane"
-                    ],
-                    "Spring 2021": [
-                        "CS102 - Group A - Dr. John"
-                    ]
-                }
-            },
-            "Electrical Engineering": {
-                "programs": {
-                    "BS EE": ["Fall 2020"],
-                    "MS EE": ["Spring 2021"]
-                },
-                "classes": {
-                    "Fall 2020": ["EE101 - Group A - Dr. Brown"],
-                    "Spring 2021": ["EE102 - Group A - Dr. Alice"]
-                }
-            }
-        }
-    }
-    return data
-
 # Add CORS Middleware
 app.add_middleware(
     CORSMiddleware,
@@ -95,43 +69,6 @@ async def upload_student_image(
         "message": "file uploaded"
     }
 
-
-# Helper function to update Excel attendance sheet
-def update_attendance_excel(class_dir, recognized_students):
-    attendance_file = f"{class_dir}/attendance.xlsx"
-    today_date = datetime.today().strftime('%Y-%m-%d')
-
-    if not os.path.exists(attendance_file):
-        # Create a new Excel file if it doesn't exist
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Attendance"
-        ws.cell(row=1, column=1, value="Roll No")
-        ws.cell(row=1, column=2, value=today_date)
-        wb.save(attendance_file)
-
-    # Load the Excel file
-    wb = load_workbook(attendance_file)
-    ws = wb.active
-
-    # Add today's date column if not already present
-    if today_date not in [cell.value for cell in ws[1]]:
-        ws.cell(row=1, column=ws.max_column + 1, value=today_date)
-
-    # Mark attendance for recognized students
-    today_column_index = None
-    for i, cell in enumerate(ws[1]):
-        if cell.value == today_date:
-            today_column_index = i + 1
-            break
-
-    if today_column_index is not None:
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=1):
-            if row[0].value in recognized_students:
-                ws.cell(row=row[0].row, column=today_column_index, value="Present")
-
-    wb.save(attendance_file)
-    return attendance_file
 
 
 @app.post("/register")
@@ -214,63 +151,46 @@ async def register_student(
     return {"message": f"Student {name} (Roll No: {rollno}) registered successfully in Batch {batch_number} for {program}."}
 
 
+# Helper functions
+def resize_image_aspect_ratio(image, max_width=4000, max_height=3000):
+    """Resize the image to fit within a max width and height, maintaining aspect ratio."""
+    height, width = image.shape[:2]
+    scale_width = max_width / width
+    scale_height = max_height / height
+    scale_factor = min(scale_width, scale_height)
+    new_width = int(width * scale_factor)
+    new_height = int(height * scale_factor)
+    return cv2.resize(image, (new_width, new_height))
+
 def extract_faces(image):
     """Extract faces from the uploaded image using MTCNN."""
-    try:
-        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        faces = mtcnn.detect_faces(img_rgb)
-        extracted_faces = []
-        for face in faces:
-            x, y, w, h = face['box']
-            face_img = img_rgb[y:y+h, x:x+w]
-            extracted_faces.append((face_img, (x, y, x+w, y+h)))  # Store face image and bounding box coordinates
-        return extracted_faces
-    except Exception as e:
-        print(f"Error during face extraction: {e}")
-        return []
+    faces = mtcnn.detect_faces(image)
+    extracted_faces = [(image[y:y+h, x:x+w], (x, y, x+w, y+h)) for x, y, w, h in [face['box'] for face in faces]]
+    return extracted_faces
 
-def recognize_faces(embedding, class_embeddings, threshold=0.92):
-    """Compare the face embedding with class embeddings and return recognized student ID."""
-    print(len(class_embeddings))
-
-    # Assuming class_embeddings is a tuple of two lists
+def recognize_faces_batch(embeddings, class_embeddings, threshold=0.92):
+    """Batch comparison of embeddings for face recognition."""
     embeddings_list, names_list = class_embeddings
+    results = []
+    for embedding in embeddings:
+        distances = np.linalg.norm(embeddings_list - embedding, axis=1)
+        min_dist_idx = np.argmin(distances)
+        if distances[min_dist_idx] < threshold:
+            results.append(names_list[min_dist_idx])
+        else:
+            results.append("Unknown")
+    return results
 
-    # Now iterate over the embeddings and names
-    for rollno, stored_embedding in zip(names_list, embeddings_list):
-       distance = np.linalg.norm(embedding - stored_embedding)
-       if distance < threshold:  # Recognition threshold
-           return rollno
-    return "Unknown"
+async def run_in_executor(func, *args):
+    """Run CPU-bound function in a separate thread."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, func, *args)
 
+async def read_and_decode_file(file_data):
+    """Read and decode image in a separate thread."""
+    return await asyncio.to_thread(cv2.imdecode, np.frombuffer(file_data, np.uint8), cv2.IMREAD_COLOR)
 
-def update_attendance_excel(class_dir, recognized_students):
-    """Update the attendance Excel sheet with recognized students."""
-    attendance_file = os.path.join(class_dir, "attendance.xlsx")
-    wb = load_workbook(attendance_file)
-    ws = wb.active
-    today_date = datetime.today().strftime('%Y-%m-%d')
-
-    # Check if today's date column exists, if not, add it
-    if today_date not in [cell.value for cell in ws[1]]:
-        ws.cell(row=1, column=ws.max_column+1, value=today_date)
-
-    # Mark attendance for recognized students
-    for student in recognized_students:
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=1):
-            if row[0].value == student:
-                today_column_index = None
-                for i, cell in enumerate(ws[1]):
-                    if cell.value == today_date:
-                        today_column_index = i + 1
-                        break
-                if today_column_index:
-                    ws.cell(row=row[0].row, column=today_column_index, value="Present")
-                    break
-
-    wb.save(attendance_file)
-    return attendance_file
-
+# Main API endpoint
 @app.post("/mark-attendance")
 async def mark_attendance(
     dept: str = Form(...),
@@ -278,20 +198,19 @@ async def mark_attendance(
     sem: str = Form(...),
     class_: str = Form(...),
     batch_number: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
     try:
-        # Paths for storing images and embeddings
-        class_dir = f"{BASE_DIR}/batches/{batch_number}/{program}/{sem}/{class_}"
-        attendance_dir = f"{class_dir}/attendance"
-        os.makedirs(attendance_dir, exist_ok=True)
+        start_time = time.time()  # Start tracking total execution time
 
-        # Save the uploaded file
-        file_path = f"{class_dir}/{file.filename}"
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        # Step 1: Read uploaded file
+        file_data = await file.read()
+        image = await read_and_decode_file(file_data)
 
-        # Load class embeddings
+        # Step 2: Resize image
+        image = resize_image_aspect_ratio(image)
+
+        # Step 3: Load class embeddings
         batch_embeddings_path = f"{BASE_DIR}/batches/{batch_number}/{program}/batch_embeddings.pkl"
         if not os.path.exists(batch_embeddings_path):
             return {"message": "No embeddings found for this class"}
@@ -299,99 +218,48 @@ async def mark_attendance(
         with open(batch_embeddings_path, "rb") as f:
             class_embeddings = pickle.load(f)
 
-        # Load and process the group image
-        image = cv2.imread(file_path)
-        faces = extract_faces(image)
+        # Step 4: Extract faces from the image in parallel
+        faces = await run_in_executor(extract_faces, image)
+
         if not faces:
             return {"message": "No faces detected in the group photo"}
 
-        recognized_students = []
+        # Step 5: Generate embeddings in parallel
+        face_images = [face_img for face_img, _ in faces]
+        embeddings = await asyncio.gather(
+            *[run_in_executor(facenet.embeddings, [face_img]) for face_img in face_images]
+        )
+        embeddings = np.array([embedding[0] for embedding in embeddings])
+
+        # Step 6: Recognize faces
+        recognized_students = recognize_faces_batch(embeddings, class_embeddings)
+
+        # Step 7: Annotate image with results
         annotated_image = image.copy()
-
-        for face_img, bbox in faces:
-            # Generate face embedding
-            embedding = facenet.embeddings([face_img])[0]
-
-            # Recognize student from embeddings
-            recognized_student = recognize_faces(embedding, class_embeddings)
-            recognized_students.append(recognized_student)
-
-            # Annotate the image
+        for (face_img, bbox), recognized_student in zip(faces, recognized_students):
             x1, y1, x2, y2 = bbox
             cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
             label = recognized_student if recognized_student != "Unknown" else "Unknown"
             cv2.putText(annotated_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
 
-        # Save the annotated image
+        # Step 8: Save annotated image
         annotated_image_filename = f"annotated_{file.filename}"
         annotated_image_path = os.path.join(attendance_static_dir, annotated_image_filename)
         compression_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
-        cv2.imwrite(annotated_image_path, annotated_image, compression_params)
+        await asyncio.to_thread(cv2.imwrite, annotated_image_path, annotated_image, compression_params)
 
+        # Step 9: Timestamp for attendance
         current_datetime = datetime.datetime.now()
-        # Format the time in 12-hour format with AM/PM
         formatted_datetime = current_datetime.strftime("%Y-%m-%d %I:%M %p")
-
         attendance_meta = f"{formatted_datetime}"
 
-        # Update the attendance Excel file
-      #  attendance_file = update_attendance_excel(class_dir, recognized_students)
-        print({
-            "message": "Attendance marked successfully",
-            "recognized_students": recognized_students,
-            "annotated_image_url": f"/static/{annotated_image_filename}",
-            "attendance_meta": attendance_meta
-          #  "attendance_file_path": attendance_file,
-        })
-    
+        # Final response
         return {
             "message": "Attendance marked successfully",
             "recognized_students": recognized_students,
             "annotated_image_url": f"/static/{annotated_image_filename}",
             "attendance_meta": attendance_meta
-          #  "attendance_file_path": attendance_file,
         }
+
     except Exception as e:
-        print("Error during attendance marking:", e)
         return {"error": str(e)}
-
-from urllib.parse import unquote
-
-@app.get("/attendance")
-async def get_attendance(
-    dept: str,
-    program: str,
-    sem: str,
-    class_: str,
-    date: str
-):
-    dept = unquote(dept)
-    program = unquote(program)
-    sem = unquote(sem)
-    class_ = unquote(class_)
-    date = unquote(date)
-
-    print(f"Decoded Department: {dept}")
-    print(f"Decoded Program: {program}")
-    print(f"Decoded Semester: {sem}")
-    print(f"Decoded Class: {class_}")
-    print(f"Decoded Date: {date}")
-
-    attendance_dir = f"{BASE_DIR}/{dept}/{program}/{sem}/{class_}/attendance"
-    if not os.path.exists(attendance_dir):
-        return {"message": "No attendance records found"}
-
-    if date:
-        attendance_file = f"{attendance_dir}/{date}.json"
-        if os.path.exists(attendance_file):
-            with open(attendance_file, "r") as f:
-                return json.load(f)
-        else:
-            return {"message": f"No attendance record found for {date}"}
-    else:
-        records = []
-        for filename in os.listdir(attendance_dir):
-            with open(f"{attendance_dir}/{filename}", "r") as f:
-                records.append(json.load(f))
-        return records
-
