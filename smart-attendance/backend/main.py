@@ -1,7 +1,9 @@
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status
 from typing import List
 import os
 import cv2
+from fastapi.responses import JSONResponse
 import numpy as np
 from mtcnn import MTCNN
 from keras_facenet import FaceNet
@@ -9,11 +11,11 @@ from datetime import datetime,timedelta
 import pickle
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import datetime
 import asyncio
 import logging
 import pickle
 from typing import List,Optional
+import re
 
 import jwt
 
@@ -42,6 +44,7 @@ facenet = FaceNet()
 
 # Base storage directory
 BASE_DIR = "storage"
+STORAGE_PATH = "storage/UsersData" # where users are stored
 os.makedirs(BASE_DIR, exist_ok=True)
 
 # Serve the "attendance" directory as static files
@@ -146,18 +149,6 @@ def verify_password(plain_password, hashed_password):
 def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email).first()
 
-# Login endpoint
-@app.post("/login")
-async def login(user: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    db_user = get_user_by_email(db, user.username)  # Using username in OAuth2PasswordRequestForm (which is email here)
-    if not db_user or not verify_password(user.password, db_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return {"message": "Login successful"}
-
 # Login endpoint - returns a JWT token
 @app.post("/login")
 async def login(user: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -180,13 +171,145 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        # Decoding the JWT token
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
         raise credentials_exception
     return email
+
+
+# Pydantic model for course data
+class Course(BaseModel):
+    course_name: str
+    batch_number: str
+
+
+
+# Pydantic model to represent a course
+class UserCourse(BaseModel):
+    className: str
+    department: str
+    program: str
+    batch: str
+    semester: str
+
+
+# API endpoint to fetch the list of courses for the current user
+@app.get("/courses", response_model=List[UserCourse])
+async def get_courses(current_user: str = Depends(get_current_user)):
+    print(current_user)
+    user_courses_path = Path("./storage/UsersData") / current_user
+    print(f"Looking for courses at: {user_courses_path.resolve()}")
+
+    if not user_courses_path.exists():
+        raise HTTPException(status_code=404, detail="User data not found")
+
+    print(user_courses_path)
+    courses = []
+    # Iterate over each course folder for the user
+    for course_folder in user_courses_path.iterdir():
+        if course_folder.is_dir():
+            try:
+                print(course_folder)
+
+                # Extract course details from folder name
+                folder_name = course_folder.name
+                course_name, batch_program = folder_name.split("_")
+                batch, program = batch_program.split("-")
+                department = "Unknown"  # Assume department is unknown or fetch it from other means
+                semester = "Unknown"  # You can also get this from other metadata, if necessary
+
+                # Add course to the list
+                courses.append(UserCourse(
+                    className=course_name,
+                    department=department,
+                    program=program,
+                    batch=batch,
+                    semester=semester
+                ))
+
+            except ValueError as e:
+                # Handle any folder naming errors gracefully
+                continue
+
+    return courses
+
+# API endpoint to add a course
+@app.post("/add-course/")
+async def add_course(course: Course, token: str = Depends(oauth2_scheme)):
+    logger.info("Token received:", token)
+    
+    # Try getting the current user (email) from the token
+    current_user = get_current_user(token)
+    print("Current user:", current_user)
+
+    
+    # Verify that the current user is a valid email
+    if current_user and not is_valid_email(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid user email"
+        )
+    
+    # Create the user folder if it doesn't exist
+    user_folder = Path(STORAGE_PATH) / current_user
+    print(f"User folder path: {user_folder}")
+    
+    if not user_folder.exists():
+        try:
+            user_folder.mkdir(parents=True, exist_ok=True)
+            print(f"Created user folder: {user_folder}")
+        except Exception as e:
+            print(f"Error creating folder {user_folder}: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not create user folder")
+
+    # Create course folder
+    course_folder = user_folder / (course.course_name +"_"+ course.batch_number)
+    print(f"Course folder path: {course_folder}")
+    
+    if not course_folder.exists():
+        try:
+            course_folder.mkdir(parents=True, exist_ok=True)
+            print(f"Created course folder: {course_folder}")
+        except Exception as e:
+            print(f"Error creating course folder {course_folder}: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not create course folder")
+
+    return {"message": f"Course '{course.course_name}' for batch {course.batch_number} created successfully!"}
+
+
+
+# Function to check if the string is a valid email
+def is_valid_email(user: str) -> bool:
+    email_regex = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+    return re.match(email_regex, user) is not None
+
+
+# Endpoint to get all batches (folders in storage/batches)
+@app.get("/get-batches", response_model=dict)
+async def get_batches():
+    try:
+        batches = [batch for batch in os.listdir("storage/batches") if os.path.isdir(os.path.join("storage/batches", batch))]
+        return {"batches": batches}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# Endpoint to get programs for a specific batch
+@app.get("/get-programs/{batch}", response_model=dict)
+async def get_programs(batch: str):
+    batch_path = os.path.join("storage/batches", batch)
+    if not os.path.isdir(batch_path):
+        return {"error": "Batch not found"}
+
+    try:
+        programs = [program for program in os.listdir(batch_path) if os.path.isdir(os.path.join(batch_path, program))]
+        return {"programs": programs}
+    except Exception as e:
+        return {"error": str(e)}
 
 # Protected endpoint - only accessible with a valid token
 @app.get("/protected")
@@ -363,6 +486,8 @@ async def mark_attendance(
     file: UploadFile = File(...),
 ):
     try:
+        print(program)
+        print(batch_number)
         start_time = time.time()  # Start tracking total execution time
 
         # Step 1: Read uploaded file
@@ -431,7 +556,7 @@ async def mark_attendance(
 
         # Step 9: Generate attendance timestamp
         step_start_time = time.time()
-        current_datetime = datetime.datetime.now()
+        current_datetime = datetime.now()
         formatted_datetime = current_datetime.strftime("%Y-%m-%d %I:%M %p")
         attendance_meta = f"{formatted_datetime}"
         logger.info(f"Step 9: Timestamp generation time: {time.time() - step_start_time:.2f} seconds")

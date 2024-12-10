@@ -1,18 +1,45 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
+import 'package:gikattend/models/course.dart';
 import 'package:gikattend/navigation/attendance_Navigation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/course_provider.dart';
 import './mark_attendance.dart';
 import './add_course_page.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
+  Future<List<Course>> fetchCourses(String jwt, String ipAddress) async {
+    final response = await http.get(
+      Uri.parse('$ipAddress/courses'),
+      headers: {
+        'Authorization': 'Bearer $jwt',
+      },
+    );
+    print(response.body);
+
+    if (response.statusCode == 200) {
+      List<Course> courses = [];
+      List<dynamic> data = json.decode(response.body);
+
+      for (var courseData in data) {
+        courses.add(Course.fromJson(courseData));
+      }
+      return courses;
+    } else {
+      throw Exception('Failed to load courses');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final provider = Provider.of<CourseProvider>(context);
+
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 130,
@@ -44,9 +71,20 @@ class HomePage extends StatelessWidget {
             ),
           ),
           // Main content (your ListView or other widgets)
-          Consumer<CourseProvider>(
-            builder: (context, provider, child) {
-              if (provider.myCourses.isEmpty) {
+          FutureBuilder<List<Course>>(
+            future:
+                fetchCourses(provider.jwt, provider.ipAddress), // Fetch courses
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return Center(child: CircularProgressIndicator());
+              } else if (snapshot.hasError) {
+                return Center(
+                  child: Text(
+                    'Error: ${snapshot.error}',
+                    style: TextStyle(fontSize: 18),
+                  ),
+                );
+              } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
                 return Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -73,17 +111,19 @@ class HomePage extends StatelessWidget {
                 );
               }
 
+              // If the courses are fetched successfully, display them
+              List<Course> courses = snapshot.data!;
+
               return ListView.builder(
                 reverse: true,
                 padding: const EdgeInsets.all(16),
-                itemCount: provider.myCourses.length,
+                itemCount: courses.length,
                 itemBuilder: (context, index) {
-                  final course = provider.myCourses[index];
+                  final course = courses[index];
                   return Card(
                     child: ListTile(
                       title: Text(course.className),
-                      subtitle:
-                          Text('${course.department} - ${course.program}'),
+                      subtitle: Text('${course.batch} - ${course.program}'),
                       trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                       onTap: () {
                         provider.setSelectedDepartment(course.department);

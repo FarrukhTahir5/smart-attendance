@@ -48,9 +48,11 @@ class _LoginPageState extends State<LoginPage> {
         setState(() {
           _jwtToken = data['access_token']; // Store the JWT token
         });
+        print(data);
 
         // You can now save the token in secure storage or shared preferences if required.
         print('Login successful, JWT Token: $_jwtToken');
+        provider.jwt = _jwtToken!;
 
         // Navigate to the next page (protected area)
         Navigator.pushReplacement(

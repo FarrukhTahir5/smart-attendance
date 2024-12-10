@@ -10,4 +10,15 @@ class Course {
       required this.semester,
       required this.className,
       required this.batch});
+
+  // Add the fromJson method
+  factory Course.fromJson(Map<String, dynamic> json) {
+    return Course(
+      className: json['className'],
+      department: json['department'],
+      program: json['program'],
+      batch: json['batch'],
+      semester: json['semester'],
+    );
+  }
 }

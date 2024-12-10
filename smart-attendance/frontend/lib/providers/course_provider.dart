@@ -13,7 +13,8 @@ class CourseProvider with ChangeNotifier {
   String? _selectedClass;
   String? _selectedBatch;
 
-  String ipAddress = "http://10.1.60.144:8000";
+  String ipAddress = "http://192.168.215.136:8000";
+  String jwt = "";
 
   CourseData? get courseData => _courseData;
   List<Course> get myCourses => List.unmodifiable(_myCourses);
