@@ -81,7 +81,6 @@ flutter:
     - assets/images/sajid.jpeg
     - assets/images/watermark.jpg
     - assets/images/gikLogo.png
-    - assets/model.tflite
 
 
 
