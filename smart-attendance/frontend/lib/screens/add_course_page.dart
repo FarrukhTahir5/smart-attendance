@@ -101,7 +101,6 @@ class _AddCoursePageState extends State<AddCoursePage> {
               TextButton(
                 onPressed: () {
                   Navigator.pop(context);
-                  Navigator.pop(context); // Go back to previous page
                 },
                 child: const Text('OK'),
               ),
