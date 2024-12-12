@@ -1,11 +1,17 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:camera/camera.dart';
+import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http; // Add the http package
 import 'package:gikattend/providers/course_provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart'; // Add image_picker package
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import './preview_attendance_page.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class MarkAttendancePage extends StatefulWidget {
   const MarkAttendancePage({super.key});
@@ -23,22 +29,65 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
       false; // Flag to toggle between camera and past attendance view
   bool _isGalleryMode = false; // Flag to toggle between gallery and camera mode
 
-  // Demo data for past attendance
-  List<AttendanceRecord> pastAttendances = [
-    AttendanceRecord(
-        date: '2024-11-01', fileUrl: 'assets/sample_attendance_1.pdf'),
-    AttendanceRecord(
-        date: '2024-11-10', fileUrl: 'assets/sample_attendance_2.pdf'),
-    AttendanceRecord(
-        date: '2024-11-15', fileUrl: 'assets/sample_attendance_3.pdf'),
-    AttendanceRecord(
-        date: '2024-11-20', fileUrl: 'assets/sample_attendance_4.pdf'),
-  ];
+  // To store past attendance fetched from the API
+  List<AttendanceRecord> pastAttendances = [];
 
   @override
   void initState() {
     super.initState();
     _initializeCamera();
+    _fetchExcelFiles(); // Fetch attendance data when page is initialized
+  }
+
+  // Function to fetch Excel files from the FastAPI endpoint
+  Future<void> _fetchExcelFiles() async {
+    var provider = Provider.of<CourseProvider>(context, listen: false);
+    final String jwt = provider.jwt;
+
+    try {
+      // Define the URL for the FastAPI endpoint, passing the course folder
+      final String courseFolder = provider.selectedClass! +
+          "_" +
+          provider.selectedBatch! +
+          "-" +
+          provider.selectedProgram!; // Set the appropriate course folder
+      print(courseFolder);
+      final String url = provider.ipAddress +
+          '/files/$courseFolder'; // Change the URL accordingly
+
+      // Make the GET request with the JWT token in the headers
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Authorization':
+              'Bearer $jwt', // Include JWT token for authentication
+        },
+      );
+
+      if (response.statusCode == 200) {
+        // Parse the response data
+        List<dynamic> data = json.decode(response.body);
+
+        setState(() {
+          // Map the response data to the appropriate data model (e.g., file name and path)
+          pastAttendances = data.map((file) {
+            return AttendanceRecord(
+              date: file['file_name'], // Use 'file_name' from the API response
+              fileUrl:
+                  file['file_path'], // Use 'file_path' from the API response
+            );
+          }).toList();
+        });
+      } else {
+        throw Exception('Failed to load Excel files');
+      }
+    } catch (e) {
+      print('Error fetching files: $e');
+      // Handle error (e.g., show a message)
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching files data.')),
+      );
+    }
   }
 
   Future<void> _initializeCamera() async {
@@ -211,7 +260,7 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
               icon: Icon(Icons.download),
               onPressed: () {
                 // Handle download logic (for demo, we will show a message)
-                _downloadAttendance(attendance);
+                _downloadAttendance(context, attendance);
               },
             ),
           ),
@@ -219,22 +268,119 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
       },
     );
   }
+}
 
-  void _downloadAttendance(AttendanceRecord attendance) {
-    // In a real scenario, this is where you'd initiate a file download.
-    // For now, we just show a placeholder message.
-    debugPrint('Downloading attendance for ${attendance.date}...');
+// Function to fetch file download link from the FastAPI endpoint
+Future<String> getFileDownloadLink(String filePath, BuildContext ctx) async {
+  var provider = Provider.of<CourseProvider>(ctx, listen: false);
+
+  final response = await http.post(
+    Uri.parse(provider.ipAddress + '/get_file_download_link'),
+    headers: {'Content-Type': 'application/json'},
+    body: json.encode({'file_path': filePath}),
+  );
+
+  if (response.statusCode == 200) {
+    // Parse the file download link from the response
+    final data = json.decode(response.body);
+    return data['file_url'];
+  } else {
+    throw Exception('Failed to get file download link');
+  }
+}
+
+Future<void> _downloadAttendance(
+    BuildContext context, AttendanceRecord attendance) async {
+  // Request storage permissions
+  var storagePermission = await Permission.storage.request();
+  var manageStoragePermission =
+      await Permission.manageExternalStorage.request();
+
+  if (!storagePermission.isGranted && !manageStoragePermission.isGranted) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-          content: Text('Downloading attendance for ${attendance.date}...')),
+          content: Text('Storage permissions are required to download files')),
+    );
+    return;
+  }
+
+  String filePath = attendance.fileUrl;
+  String fileName = filePath.split('/').last;
+
+  try {
+    // Get the full file URL from the FastAPI endpoint
+    var provider = Provider.of<CourseProvider>(context, listen: false);
+    String fullUrl =
+        provider.ipAddress + await getFileDownloadLink(filePath, context);
+
+    // Try to get a safe download directory
+    Directory? downloadsDir = await getExternalStorageDirectory();
+    if (downloadsDir == null) {
+      throw Exception('Could not access external storage directory');
+    }
+
+    // Ensure the directory exists and is writable
+    String userDirectoryPath = '${downloadsDir.path}/Documents/Downloads';
+    Directory userDirectory = Directory(userDirectoryPath);
+
+    // Create the directory if it doesn't exist
+    if (!await userDirectory.exists()) {
+      await userDirectory.create(recursive: true);
+    }
+
+    // Prompt user to choose download folder
+    String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select Download Folder',
+      initialDirectory: userDirectoryPath,
+    );
+
+    if (selectedDirectory == null) {
+      // User canceled the folder selection
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download canceled')),
+      );
+      return;
+    }
+
+    // Sanitize the filename to remove any potentially problematic characters
+    String sanitizedFileName = _sanitizeFileName(fileName);
+
+    // Create the full path for the file
+    String savePath = '$selectedDirectory/$sanitizedFileName';
+
+    // Download the file using Dio
+    Dio dio = Dio();
+    await dio.download(
+      fullUrl,
+      savePath,
+      options: Options(
+        headers: {
+          HttpHeaders.acceptEncodingHeader: '*', // Handle different encodings
+        },
+      ),
+    );
+
+    // Show success message with file path
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('File downloaded to: $savePath')),
+    );
+  } catch (e) {
+    print('Download error details: $e'); // Log full error details
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Download failed: ${e.toString()}')),
     );
   }
 }
 
+// Helper function to sanitize filename
+String _sanitizeFileName(String fileName) {
+  // Remove any characters that might cause issues in file paths
+  return fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+}
+
 class AttendanceRecord {
   final String date;
-  final String
-      fileUrl; // The file URL or local path to the PDF, for demo purposes
+  final String fileUrl; // The file URL or local path to the PDF
 
   AttendanceRecord({required this.date, required this.fileUrl});
 }
