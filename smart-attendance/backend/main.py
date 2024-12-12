@@ -359,6 +359,7 @@ async def register_student(
             "files": [file.filename for file in files]
         })
         
+        batch_number = batch_number[:2]
         print(f"Received name: {name}, rollno: {rollno}, batch_number: {batch_number}, program: {program}")
         print(f"Received files: {[file.filename for file in files]}")
     except Exception as e:
@@ -482,11 +483,11 @@ def get_student_roll_numbers(class_path: str):
     return [folder for folder in student_folders if os.path.isdir(os.path.join(class_path, folder))]
 
 # Helper function to generate Excel attendance sheet
-def generate_attendance_excel(date: str, recognized_students: List[str], class_path: str, instructor_email: str):
+def generate_attendance_excel(date: str, recognized_students: List[str], class_path: str, instructor_email: str,courseFolder:str):
     try:
         # File path to save or update the Excel sheet
-        attendance_file_path = os.path.join("attendance_records", f"{instructor_email}_attendance.xlsx")
-        date = "2024-12-13"
+        attendance_file_path = f"{"storage/UsersData"}/{instructor_email}/{courseFolder}/main.xlsx"
+
         # Ensure the folder exists
         os.makedirs("attendance_records", exist_ok=True)
 
@@ -535,9 +536,6 @@ async def mark_attendance(
         print(batch_number)
         print(class_)
         USERDATA = "storage/batches"
-
-        # Get the instructor email from the JWT token
-        instructor_email = get_current_user(token)
 
         start_time = time.time()
 
@@ -588,10 +586,14 @@ async def mark_attendance(
         compression_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
         await asyncio.to_thread(cv2.imwrite, annotated_image_path, annotated_image, compression_params)
 
+
+        # Get the instructor email from the JWT token
+        instructor_email = get_current_user(token)
+
         # Step 9: Generate the Excel attendance file
         current_datetime = datetime.now()
         formatted_datetime = current_datetime.strftime("%Y-%m-%d")
-        attendance_file_path = generate_attendance_excel(formatted_datetime, recognized_students, class_path, instructor_email)
+        attendance_file_path = generate_attendance_excel(formatted_datetime, recognized_students, class_path, instructor_email,f"{class_}_{batch_number}-{program}")
 
         total_time_taken = time.time() - start_time
 
