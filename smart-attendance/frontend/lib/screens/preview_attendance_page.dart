@@ -39,9 +39,15 @@ class _PreviewAttendancePageState extends State<PreviewAttendancePage> {
         'class_': provider.selectedClass,
         'batch_number': provider.selectedBatch,
         'file': await MultipartFile.fromFile(widget.imagePath),
+        'token': provider.jwt
       });
 
       final dio = Dio();
+      dio.options.headers = {
+        'Authorization':
+            'Bearer ${provider.jwt}', // Add token in Authorization header
+      };
+
       final response = await dio.post(
         provider.ipAddress + '/mark-attendance',
         data: formData,

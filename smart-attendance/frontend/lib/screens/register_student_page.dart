@@ -21,6 +21,7 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
   final _semesterController = TextEditingController();
   List<File> _images = []; // List to hold selected images
   final ImagePicker _picker = ImagePicker();
+  bool isLoading = false; // Track loading state
 
   @override
   void dispose() {
@@ -31,12 +32,22 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
     super.dispose();
   }
 
-  // Method to pick multiple images
+  // Method to pick multiple images from gallery
   Future<void> _pickImages() async {
     final pickedFiles = await _picker.pickMultiImage();
     if (pickedFiles != null) {
       setState(() {
         _images = pickedFiles.map((e) => File(e.path)).toList();
+      });
+    }
+  }
+
+  // Method to take a picture from the camera
+  Future<void> _takePicture() async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.camera);
+    if (pickedFile != null) {
+      setState(() {
+        _images.add(File(pickedFile.path));
       });
     }
   }
@@ -48,6 +59,10 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
     // Function to handle the registration request using Dio
     Future<void> _registerStudent() async {
       if (_formKey.currentState!.validate()) {
+        setState(() {
+          isLoading = true; // Show loading indicator
+        });
+
         try {
           List<MultipartFile> files = [];
           for (var image in _images) {
@@ -57,12 +72,11 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
           FormData formData = FormData.fromMap({
             'name': _nameController.text,
             'rollno': _rollNoController.text,
-            'batch_number': "32",
+            'batch_number': provider.selectedBatch! + provider.selectedProgram!,
             'program': "ai",
             'files': files, // Send a list of files
           });
 
-          print(formData.fields);
           // Instantiate Dio
           final dio = Dio();
 
@@ -97,6 +111,10 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
               backgroundColor: Colors.red,
             ),
           );
+        } finally {
+          setState(() {
+            isLoading = false; // Hide loading indicator when done
+          });
         }
       }
     }
@@ -148,37 +166,7 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
                         },
                       ),
                       const SizedBox(height: 16),
-                      // TextFormField(
-                      //   controller: _programController,
-                      //   decoration: const InputDecoration(
-                      //     labelText: 'Program',
-                      //     border: OutlineInputBorder(),
-                      //     prefixIcon: Icon(Icons.school),
-                      //   ),
-                      //   validator: (value) {
-                      //     if (value == null || value.isEmpty) {
-                      //       return 'Please enter program';
-                      //     }
-                      //     return null;
-                      //   },
-                      // ),
-                      // const SizedBox(height: 16),
-                      // TextFormField(
-                      //   controller: _semesterController,
-                      //   decoration: const InputDecoration(
-                      //     labelText: 'Batch',
-                      //     border: OutlineInputBorder(),
-                      //     prefixIcon: Icon(Icons.calendar_today),
-                      //   ),
-                      //   validator: (value) {
-                      //     if (value == null || value.isEmpty) {
-                      //       return 'Please enter Batch';
-                      //     }
-                      //     return null;
-                      //   },
-                      // ),
-                      // const SizedBox(height: 16),
-                      // Button to pick multiple images
+                      // Button to pick multiple images from gallery
                       ElevatedButton.icon(
                         onPressed: _pickImages,
                         icon: const Icon(Icons.add_a_photo),
@@ -188,6 +176,17 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
                         ),
                       ),
                       const SizedBox(height: 16),
+                      // Button to take a picture from camera
+                      ElevatedButton.icon(
+                        onPressed: _takePicture,
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('Take Picture'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Display selected images
                       if (_images.isNotEmpty)
                         Wrap(
                           spacing: 8,
@@ -205,14 +204,19 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
                 ),
               ),
               const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _registerStudent,
-                icon: const Icon(Icons.person_add),
-                label: const Text('Register Student'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-              ),
+              // If loading, show a loading spinner instead of the button
+              isLoading
+                  ? Center(
+                      child: CircularProgressIndicator(),
+                    )
+                  : ElevatedButton.icon(
+                      onPressed: _registerStudent,
+                      icon: const Icon(Icons.person_add),
+                      label: const Text('Register Student'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      ),
+                    ),
             ],
           ),
         ),
