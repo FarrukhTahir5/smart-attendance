@@ -18,7 +18,9 @@ from typing import List,Optional
 import re
 
 import jwt
+import time
 
+import pandas as pd
 
 from fastapi.security import OAuth2PasswordRequestForm,OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -27,13 +29,12 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import bcrypt
 from sqlalchemy.orm import Session
+from fastapi.staticfiles import StaticFiles
 
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-from fastapi.staticfiles import StaticFiles
 
 
 app = FastAPI()
@@ -474,7 +475,50 @@ def recognize_faces_batch(embeddings, class_embeddings, threshold=0.92):
             results.append("Unknown")
     return results
 
-import time
+
+# Helper function to extract student roll numbers
+def get_student_roll_numbers(class_path: str):
+    student_folders = os.listdir(class_path)
+    return [folder for folder in student_folders if os.path.isdir(os.path.join(class_path, folder))]
+
+# Helper function to generate Excel attendance sheet
+def generate_attendance_excel(date: str, recognized_students: List[str], class_path: str, instructor_email: str):
+    try:
+        # File path to save or update the Excel sheet
+        attendance_file_path = os.path.join("attendance_records", f"{instructor_email}_attendance.xlsx")
+        date = "2024-12-13"
+        # Ensure the folder exists
+        os.makedirs("attendance_records", exist_ok=True)
+
+        # Get the student roll numbers
+        roll_numbers = get_student_roll_numbers(class_path)
+
+        # Check if the Excel file already exists
+        if os.path.exists(attendance_file_path):
+            # Load existing attendance file
+            df = pd.read_excel(attendance_file_path, index_col=0)
+        else:
+            # Create a new DataFrame with roll numbers as the index
+            df = pd.DataFrame(index=roll_numbers)
+
+        # Add the new date column if not already present
+        if date not in df.columns:
+            df[date] = 'A'  # Default to Absent ('A')
+
+        # Mark recognized students as Present ('P') for the given date
+        for roll_number in recognized_students:
+            if roll_number in df.index:
+                df.at[roll_number, date] = 'P'
+
+        # Save the updated DataFrame back to Excel
+        df.to_excel(attendance_file_path)
+
+        return attendance_file_path
+
+    except Exception as e:
+        print(f"Error generating attendance Excel file: {e}")
+        raise
+
 
 @app.post("/mark-attendance")
 async def mark_attendance(
@@ -484,94 +528,81 @@ async def mark_attendance(
     class_: str = Form(...),
     batch_number: str = Form(...),
     file: UploadFile = File(...),
+    token: str = Depends(oauth2_scheme)
 ):
     try:
         print(program)
         print(batch_number)
-        start_time = time.time()  # Start tracking total execution time
+        print(class_)
+        USERDATA = "storage/batches"
 
+        # Get the instructor email from the JWT token
+        instructor_email = get_current_user(token)
+
+        start_time = time.time()
+
+        # Path to the class folder
+        class_path = f"{USERDATA}/{batch_number}/{program}"
         # Step 1: Read uploaded file
-        step_start_time = time.time()
         file_data = await file.read()
         image = await read_and_decode_file(file_data)
-        logger.info(f"Step 1: File read and decode time: {time.time() - step_start_time:.2f} seconds")
 
         # Step 2: Resize image
-        step_start_time = time.time()
         image = resize_image_aspect_ratio(image)
-        logger.info(f"Step 2: Image resizing time: {time.time() - step_start_time:.2f} seconds")
 
         # Step 3: Load class embeddings
-        step_start_time = time.time()
-        batch_embeddings_path = f"{BASE_DIR}/batches/{batch_number}/{program}/batch_embeddings.pkl"
+        batch_embeddings_path = f"{"storage"}/batches/{batch_number}/{program}/batch_embeddings.pkl"
+
         if not os.path.exists(batch_embeddings_path):
-            logger.error(f"No embeddings found for this class: {batch_embeddings_path}")
             return {"message": "No embeddings found for this class"}
 
         with open(batch_embeddings_path, "rb") as f:
             class_embeddings = pickle.load(f)
-        logger.info(f"Step 3: Embeddings load time: {time.time() - step_start_time:.2f} seconds")
 
         # Step 4: Extract faces from the image
-        step_start_time = time.time()
         faces = await run_in_executor(extract_faces, image)
-        logger.info(f"Step 4: Face extraction time: {time.time() - step_start_time:.2f} seconds")
-
         if not faces:
-            logger.warning("No faces detected in the group photo")
             return {"message": "No faces detected in the group photo"}
 
-        # Step 5: Generate embeddings in parallel
-        step_start_time = time.time()
+        # Step 5: Generate embeddings for detected faces
         face_images = [face_img for face_img, _ in faces]
-
         embeddings = await asyncio.gather(
             *[run_in_executor(facenet.embeddings, [face_img]) for face_img in face_images]
         )
         embeddings = np.array([embedding[0] for embedding in embeddings])
-        logger.info(f"Step 5: Embedding generation time: {time.time() - step_start_time:.2f} seconds")
 
         # Step 6: Recognize faces
-        step_start_time = time.time()
         recognized_students = recognize_faces_batch(embeddings, class_embeddings)
-        logger.info(f"Step 6: Face recognition time: {time.time() - step_start_time:.2f} seconds")
 
-        # Step 7: Annotate image with results
-        step_start_time = time.time()
+        # Step 7: Annotate the image with recognized students
         annotated_image = image.copy()
         for (face_img, bbox), recognized_student in zip(faces, recognized_students):
             x1, y1, x2, y2 = bbox
             cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
             label = recognized_student if recognized_student != "Unknown" else "Unknown"
             cv2.putText(annotated_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
-        logger.info(f"Step 7: Image annotation time: {time.time() - step_start_time:.2f} seconds")
 
-        # Step 8: Save annotated image
-        step_start_time = time.time()
+        # Step 8: Save the annotated image
         annotated_image_filename = f"annotated_{file.filename}"
         annotated_image_path = os.path.join(attendance_static_dir, annotated_image_filename)
         compression_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
         await asyncio.to_thread(cv2.imwrite, annotated_image_path, annotated_image, compression_params)
-        logger.info(f"Step 8: Save annotated image time: {time.time() - step_start_time:.2f} seconds")
 
-        # Step 9: Generate attendance timestamp
-        step_start_time = time.time()
+        # Step 9: Generate the Excel attendance file
         current_datetime = datetime.now()
-        formatted_datetime = current_datetime.strftime("%Y-%m-%d %I:%M %p")
-        attendance_meta = f"{formatted_datetime}"
-        logger.info(f"Step 9: Timestamp generation time: {time.time() - step_start_time:.2f} seconds")
+        formatted_datetime = current_datetime.strftime("%Y-%m-%d")
+        attendance_file_path = generate_attendance_excel(formatted_datetime, recognized_students, class_path, instructor_email)
 
-        # Final logging and response
         total_time_taken = time.time() - start_time
-        logger.info(f"Total time taken for the entire process: {total_time_taken:.2f} seconds")
 
         return {
             "message": "Attendance marked successfully",
             "recognized_students": recognized_students,
             "annotated_image_url": f"/static/{annotated_image_filename}",
-            "attendance_meta": attendance_meta
+            "attendance_file_url": f"/static/attendance/{os.path.basename(attendance_file_path)}",
+            "attendance_meta": formatted_datetime,
+            "total_time_taken": total_time_taken
         }
 
     except Exception as e:
-        logger.error(f"Error during attendance marking: {e}")
         return {"error": str(e)}
