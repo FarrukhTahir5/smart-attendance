@@ -1,3 +1,5 @@
+#just a funny bug
+
 from pathlib import Path
 import random
 import shutil
@@ -542,7 +544,7 @@ async def mark_attendance(
         image = await read_and_decode_file(file_data)
 
         # Step 2: Resize image
-        image = resize_image_aspect_ratio(image)
+       # image = resize_image_aspect_ratio(image)
 
         # Step 3: Load class embeddings
         batch_embeddings_path = f"{"storage"}/batches/{batch_number}/{program}/batch_embeddings.pkl"
@@ -606,15 +608,25 @@ async def mark_attendance(
         return {"error": str(e)}
     
 
-def resize_image_aspect_ratio(image, max_width=4000, max_height=3000):
-    """Resize the image to fit within a max width and height, maintaining aspect ratio."""
-    height, width = image.shape[:2]
-    scale_width = max_width / width
-    scale_height = max_height / height
-    scale_factor = min(scale_width, scale_height)
-    new_width = int(width * scale_factor)
-    new_height = int(height * scale_factor)
-    return cv2.resize(image, (new_width, new_height))
+# def resize_image_aspect_ratio(image, max_width=4000, max_height=3000):
+#     """Resize the image to fit within a max width and height, maintaining aspect ratio."""
+#     height, width = image.shape[:2]
+#     scale_width = max_width / width
+#     scale_height = max_height / height
+#     scale_factor = min(scale_width, scale_height)
+#     new_width = int(width * scale_factor)
+#     new_height = int(height * scale_factor)
+
+#     save_path='resized/image_resized.jpg'
+
+#     resized_image =cv2.resize(image, (new_width, new_height))
+#      # Ensure the "resized" directory exists
+#     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    
+#     # Save the image to the specified path
+#     cv2.imwrite(save_path, resized_image)
+
+#     return cv2.resize(image, (new_width, new_height))
 
 def extract_faces(image):
     """Extract faces from the uploaded image using MTCNN."""
