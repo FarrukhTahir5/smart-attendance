@@ -7,7 +7,14 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 class RegisterStudentPage extends StatefulWidget {
-  const RegisterStudentPage({super.key});
+  final Function
+      onRegisterComplete; // Callback to notify when registration is complete
+  final Function onRegistering; // Callback to notify when registering
+
+  const RegisterStudentPage(
+      {super.key,
+      required this.onRegisterComplete,
+      required this.onRegistering});
 
   @override
   State<RegisterStudentPage> createState() => _RegisterStudentPageState();
@@ -60,6 +67,7 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
     Future<void> _registerStudent() async {
       if (_formKey.currentState!.validate()) {
         setState(() {
+          widget.onRegistering();
           isLoading = true; // Show loading indicator
         });
 
@@ -95,7 +103,11 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
                 backgroundColor: Colors.green,
               ),
             );
+
+            // Notify the parent widget that registration is complete
+            widget.onRegisterComplete();
           } else {
+            widget.onRegisterComplete();
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('Failed to register student: ${response.data}'),
@@ -104,6 +116,8 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
             );
           }
         } catch (e) {
+          widget.onRegisterComplete();
+
           print(e);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(

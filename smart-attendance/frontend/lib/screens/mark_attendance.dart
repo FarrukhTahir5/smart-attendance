@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http; // Add the http package
 import 'package:gikattend/providers/course_provider.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -12,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import './preview_attendance_page.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'dart:math';
 
 class MarkAttendancePage extends StatefulWidget {
   const MarkAttendancePage({super.key});
@@ -211,8 +213,22 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
                       FloatingActionButton(
                         onPressed: () async {
                           try {
+                            // Lock to landscape orientation before taking picture
+                            await SystemChrome.setPreferredOrientations([
+                              DeviceOrientation.landscapeLeft,
+                              DeviceOrientation.landscapeRight,
+                            ]);
+
                             await _initializeControllerFuture;
                             final image = await _controller!.takePicture();
+
+                            // Reset orientation after capturing
+                            await SystemChrome.setPreferredOrientations([
+                              DeviceOrientation.portraitUp,
+                              DeviceOrientation.portraitDown,
+                              DeviceOrientation.landscapeLeft,
+                              DeviceOrientation.landscapeRight,
+                            ]);
 
                             if (mounted) {
                               Navigator.push(

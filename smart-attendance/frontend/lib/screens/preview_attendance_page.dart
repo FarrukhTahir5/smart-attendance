@@ -54,6 +54,13 @@ class _PreviewAttendancePageState extends State<PreviewAttendancePage> {
       );
 
       if (response.statusCode == 200) {
+        if (response.data['message'] == "800") {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content:
+                    Text('No Faces Found Take A Proper Image & Try Again!')),
+          );
+        }
         print(response.data);
         final annotatedImagePath =
             provider.ipAddress + response.data['annotated_image_url'];

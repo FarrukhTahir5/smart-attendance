@@ -13,7 +13,7 @@ class CourseProvider with ChangeNotifier {
   String? _selectedClass;
   String? _selectedBatch;
 
-  String ipAddress = "http://192.168.0.102:8000";
+  String ipAddress = "https://hfgcztkb-8000.brs.devtunnels.ms";
   String jwt = "";
 
   CourseData? get courseData => _courseData;

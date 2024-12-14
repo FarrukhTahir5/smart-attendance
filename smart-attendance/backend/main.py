@@ -555,10 +555,15 @@ async def mark_attendance(
         with open(batch_embeddings_path, "rb") as f:
             class_embeddings = pickle.load(f)
 
+        print("entering extractor")
         # Step 4: Extract faces from the image
         faces = await run_in_executor(extract_faces, image)
         if not faces:
-            return {"message": "No faces detected in the group photo"}
+            return {"message": "800"}
+
+        print("faces")
+        print(faces)
+
 
         # Step 5: Generate embeddings for detected faces
         face_images = [face_img for face_img, _ in faces]
@@ -603,7 +608,6 @@ async def mark_attendance(
             "attendance_meta": formatted_datetime,
             "total_time_taken": total_time_taken
         }
-
     except Exception as e:
         return {"error": str(e)}
     
@@ -630,9 +634,33 @@ async def mark_attendance(
 
 def extract_faces(image):
     """Extract faces from the uploaded image using MTCNN."""
-    faces = mtcnn.detect_faces(image)
-    extracted_faces = [(image[y:y+h, x:x+w], (x, y, x+w, y+h)) for x, y, w, h in [face['box'] for face in faces]]
-    return extracted_faces
+    print(image.shape)  # Should print something like (H, W, 3)
+        # Attempt to detect faces and handle any errors gracefully
+    try:
+        # Detect faces using MTCNN
+        faces = mtcnn.detect_faces(image)
+
+        print("crossed faces")
+
+        # Check if faces were detected
+        if not faces:
+            print("No faces detected.")
+            return []
+
+        # Extract faces and bounding boxes
+        extracted_faces = []
+        for face in faces:
+            x, y, w, h = face['box']
+            # Crop the face region from the image
+            cropped_face = image[y:y+h, x:x+w]
+            extracted_faces.append((cropped_face, (x, y, x+w, y+h)))
+
+        return extracted_faces
+
+    except Exception as e:
+        # Catch any exception (e.g., shape mismatches) and return empty list
+        print(f"Error during face detection: {e}")
+        return []
 
 def recognize_faces(embedding, class_embeddings, threshold=0.92):
     """Compare the face embedding with class embeddings and return recognized student ID."""
