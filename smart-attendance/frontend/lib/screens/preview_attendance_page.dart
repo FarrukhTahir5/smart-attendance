@@ -39,15 +39,28 @@ class _PreviewAttendancePageState extends State<PreviewAttendancePage> {
         'class_': provider.selectedClass,
         'batch_number': provider.selectedBatch,
         'file': await MultipartFile.fromFile(widget.imagePath),
+        'token': provider.jwt
       });
 
       final dio = Dio();
+      dio.options.headers = {
+        'Authorization':
+            'Bearer ${provider.jwt}', // Add token in Authorization header
+      };
+
       final response = await dio.post(
         provider.ipAddress + '/mark-attendance',
         data: formData,
       );
 
       if (response.statusCode == 200) {
+        if (response.data['message'] == "800") {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content:
+                    Text('No Faces Found Take A Proper Image & Try Again!')),
+          );
+        }
         print(response.data);
         final annotatedImagePath =
             provider.ipAddress + response.data['annotated_image_url'];

@@ -13,13 +13,27 @@ class AttendanceAndRegistrationNavigation extends StatefulWidget {
 class _AttendanceAndRegistrationNavigationState
     extends State<AttendanceAndRegistrationNavigation> {
   int _selectedIndex = 0;
+  bool isRegistering = false; // Flag to track if registration is in progress
 
-  final List<Widget> _pages = const [
-    MarkAttendancePage(),
-    RegisterStudentPage(),
-  ];
+  // Callback function to handle when registration is complete
+  void _onRegistrationComplete() {
+    setState(() {
+      isRegistering = false; // Reset the flag after registration is complete
+      _selectedIndex = 0; // Switch to the 'Mark Attendance' page
+    });
+  }
+
+  // Callback function to handle when registration is complete
+  void _onRegistration() {
+    setState(() {
+      isRegistering = true; // Reset the flag after registration is complete
+    });
+  }
 
   void _onItemTapped(int index) {
+    if (isRegistering) {
+      return; // Don't allow navigation to the 'Register Student' page while registering
+    }
     setState(() {
       _selectedIndex = index;
     });
@@ -27,6 +41,15 @@ class _AttendanceAndRegistrationNavigationState
 
   @override
   Widget build(BuildContext context) {
+    // Now passing the callback function when initializing RegisterStudentPage
+    final List<Widget> _pages = [
+      const MarkAttendancePage(),
+      RegisterStudentPage(
+        onRegisterComplete: _onRegistrationComplete,
+        onRegistering: _onRegistration,
+      ),
+    ];
+
     return Scaffold(
       body: _pages[_selectedIndex],
       bottomNavigationBar: NavigationBar(

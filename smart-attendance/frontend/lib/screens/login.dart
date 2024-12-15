@@ -16,9 +16,9 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   // Default values for email and password
   final TextEditingController _emailController =
-      TextEditingController(text: 'faculty@giki.edu.pk');
+      TextEditingController(text: 'demo@test.com');
   final TextEditingController _passwordController =
-      TextEditingController(text: 'password123');
+      TextEditingController(text: 'abc123');
 
   bool _saveLoginDetails = false;
   String? _jwtToken;

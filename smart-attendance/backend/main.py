@@ -1,4 +1,9 @@
+#just a funny bug
+
 from pathlib import Path
+import random
+import shutil
+import string
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status
 from typing import List
 import os
@@ -18,7 +23,9 @@ from typing import List,Optional
 import re
 
 import jwt
+import time
 
+import pandas as pd
 
 from fastapi.security import OAuth2PasswordRequestForm,OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -27,13 +34,12 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import bcrypt
 from sqlalchemy.orm import Session
+from fastapi.staticfiles import StaticFiles
 
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-from fastapi.staticfiles import StaticFiles
 
 
 app = FastAPI()
@@ -149,19 +155,33 @@ def verify_password(plain_password, hashed_password):
 def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email).first()
 
-# Login endpoint - returns a JWT token
-@app.post("/login")
-async def login(user: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    db_user = get_user_by_email(db, user.username)  # 'username' is the email in this case
-    if not db_user or not verify_password(user.password, db_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    # Create JWT token
-    access_token = create_access_token(data={"sub": db_user.email})
-    return {"access_token": access_token, "token_type": "bearer"}
+
+# Model to accept file path from the client
+class FileRequest(BaseModel):
+    file_path: str
+
+
+# Dependency to get the current user's email from the token
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        # Decode JWT token to extract email
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+    return email
+
+# Pydantic model to return the list of file info
+class FileInfo(BaseModel):
+    filename: str
+    file_path: str
 
 # Dependency to get the current user from the token
 def get_current_user(token: str = Depends(oauth2_scheme)):
@@ -195,6 +215,36 @@ class UserCourse(BaseModel):
     program: str
     batch: str
     semester: str
+
+
+
+# Endpoint to get the list of Excel files for a given instructor and course
+@app.get("/files/{courseFolder}", response_model=List[dict])
+async def get_excel_files(courseFolder: str, token: str = Depends(oauth2_scheme)):
+    instructor_email = get_current_user(token)
+    
+    # Define the base directory structure
+    base_folder = f"storage/UsersData/{instructor_email}/{courseFolder}"
+    
+    # Check if the directory exists
+    if not os.path.exists(base_folder):
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # List to store the Excel file names and their relative paths
+    excel_files = []
+
+    # Walk through the directory to find Excel files (.xlsx and .xls)
+    for root, dirs, files in os.walk(base_folder):
+        for file in files:
+            if file.endswith((".xlsx", ".xls")):
+                # Get the relative path of the file
+                relative_path = os.path.relpath(root, "storage")
+                excel_files.append({
+                    "file_name": file,
+                    "file_path": os.path.join(relative_path, file)
+                })
+
+    return excel_files
 
 
 # API endpoint to fetch the list of courses for the current user
@@ -236,6 +286,93 @@ async def get_courses(current_user: str = Depends(get_current_user)):
                 continue
 
     return courses
+
+
+# Endpoint to get all batches (folders in storage/batches)
+@app.get("/get-batches", response_model=dict)
+async def get_batches():
+    try:
+        batches = [batch for batch in os.listdir("storage/batches") if os.path.isdir(os.path.join("storage/batches", batch))]
+        return {"batches": batches}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Endpoint to get programs for a specific batch
+@app.get("/get-programs/{batch}", response_model=dict)
+async def get_programs(batch: str):
+    batch_path = os.path.join("storage/batches", batch)
+    if not os.path.isdir(batch_path):
+        return {"error": "Batch not found"}
+
+    try:
+        programs = [program for program in os.listdir(batch_path) if os.path.isdir(os.path.join(batch_path, program))]
+        return {"programs": programs}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Protected endpoint - only accessible with a valid token
+@app.get("/protected")
+async def protected_route(current_user: str = Depends(get_current_user)):
+    return {"message": f"Hello {current_user}, you are authenticated!"}
+
+# Login endpoint - returns a JWT token
+@app.post("/login")
+async def login(user: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    db_user = get_user_by_email(db, user.username)  # 'username' is the email in this case
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # Create JWT token
+    access_token = create_access_token(data={"sub": db_user.email})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/get_file_download_link")
+async def get_file_download_link(request: FileRequest):
+    logger.info(f"Received request to copy file: {request.file_path}")
+    
+    # Extract the file path from the request
+    file_path = Path("storage/" + request.file_path)
+    logger.info(f"File path as Path object: {file_path}")
+
+    # Check if file exists
+    if not file_path.exists():
+        logger.error(f"File not found at path: {file_path}")
+        raise HTTPException(status_code=404, detail="File not found")
+    else:
+        logger.info(f"File exists at path: {file_path}")
+
+    # Ensure the file is a valid file (not a directory)
+    if not file_path.is_file():
+        logger.error(f"The path {file_path} is not a file, but a directory or invalid file type.")
+        raise HTTPException(status_code=400, detail="Provided path is not a file")
+    else:
+        logger.info(f"The file {file_path.name} is a valid file.")
+
+    # Ensure attendance_static_dir is a Path object (convert if it's a string)
+    dir = Path(attendance_static_dir)
+
+    # Generate a 5-digit random filename
+    random_filename = ''.join(random.choices(string.digits, k=5)) + file_path.suffix
+    destination_path = dir / random_filename  # Using the random 5-digit filename
+    
+    # Try copying the file to the attendance_static_dir with the new name
+    try:
+        logger.info(f"Copying file from {file_path} to {destination_path}")
+        shutil.copy(file_path, destination_path)
+        logger.info(f"File copied successfully to {destination_path}")
+    except Exception as e:
+        logger.error(f"Failed to copy file from {file_path} to {dir}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to copy file: {e}")
+
+    # Generate and return the full URL of the copied file
+    file_url = f"/static/{random_filename}"
+    logger.info(f"Returning file URL: {file_url}")
+    
+    return {"file_url": file_url}
 
 # API endpoint to add a course
 @app.post("/add-course/")
@@ -279,43 +416,6 @@ async def add_course(course: Course, token: str = Depends(oauth2_scheme)):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not create course folder")
 
     return {"message": f"Course '{course.course_name}' for batch {course.batch_number} created successfully!"}
-
-
-
-# Function to check if the string is a valid email
-def is_valid_email(user: str) -> bool:
-    email_regex = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
-    return re.match(email_regex, user) is not None
-
-
-# Endpoint to get all batches (folders in storage/batches)
-@app.get("/get-batches", response_model=dict)
-async def get_batches():
-    try:
-        batches = [batch for batch in os.listdir("storage/batches") if os.path.isdir(os.path.join("storage/batches", batch))]
-        return {"batches": batches}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# Endpoint to get programs for a specific batch
-@app.get("/get-programs/{batch}", response_model=dict)
-async def get_programs(batch: str):
-    batch_path = os.path.join("storage/batches", batch)
-    if not os.path.isdir(batch_path):
-        return {"error": "Batch not found"}
-
-    try:
-        programs = [program for program in os.listdir(batch_path) if os.path.isdir(os.path.join(batch_path, program))]
-        return {"programs": programs}
-    except Exception as e:
-        return {"error": str(e)}
-
-# Protected endpoint - only accessible with a valid token
-@app.get("/protected")
-async def protected_route(current_user: str = Depends(get_current_user)):
-    return {"message": f"Hello {current_user}, you are authenticated!"}
-
 @app.post("/upload-student-image")
 async def upload_student_image(
     name: str = Form(...),
@@ -338,8 +438,6 @@ async def upload_student_image(
         "message": "file uploaded"
     }
 
-
-
 @app.post("/register")
 async def register_student(
     name: str = Form(...),
@@ -358,6 +456,7 @@ async def register_student(
             "files": [file.filename for file in files]
         })
         
+        batch_number = batch_number[:2]
         print(f"Received name: {name}, rollno: {rollno}, batch_number: {batch_number}, program: {program}")
         print(f"Received files: {[file.filename for file in files]}")
     except Exception as e:
@@ -420,22 +519,148 @@ async def register_student(
     return {"message": f"Student {name} (Roll No: {rollno}) registered successfully in Batch {batch_number} for {program}."}
 
 
+@app.post("/mark-attendance")
+async def mark_attendance(
+    dept: str = Form(...),
+    program: str = Form(...),
+    sem: str = Form(...),
+    class_: str = Form(...),
+    batch_number: str = Form(...),
+    file: UploadFile = File(...),
+    token: str = Depends(oauth2_scheme)
+):
+    try:
+        print(program)
+        print(batch_number)
+        print(class_)
+        USERDATA = "storage/batches"
 
-def resize_image_aspect_ratio(image, max_width=4000, max_height=3000):
-    """Resize the image to fit within a max width and height, maintaining aspect ratio."""
-    height, width = image.shape[:2]
-    scale_width = max_width / width
-    scale_height = max_height / height
-    scale_factor = min(scale_width, scale_height)
-    new_width = int(width * scale_factor)
-    new_height = int(height * scale_factor)
-    return cv2.resize(image, (new_width, new_height))
+        start_time = time.time()
+
+        # Path to the class folder
+        class_path = f"{USERDATA}/{batch_number}/{program}"
+        # Step 1: Read uploaded file
+        file_data = await file.read()
+        image = await read_and_decode_file(file_data)
+
+        # Step 2: Resize image
+       # image = resize_image_aspect_ratio(image)
+
+        # Step 3: Load class embeddings
+        batch_embeddings_path = f"{"storage"}/batches/{batch_number}/{program}/batch_embeddings.pkl"
+
+        if not os.path.exists(batch_embeddings_path):
+            return {"message": "No embeddings found for this class"}
+
+        with open(batch_embeddings_path, "rb") as f:
+            class_embeddings = pickle.load(f)
+
+        print("entering extractor")
+        # Step 4: Extract faces from the image
+        faces = await run_in_executor(extract_faces, image)
+        if not faces:
+            return {"message": "800"}
+
+        print("faces")
+        print(faces)
+
+
+        # Step 5: Generate embeddings for detected faces
+        face_images = [face_img for face_img, _ in faces]
+        embeddings = await asyncio.gather(
+            *[run_in_executor(facenet.embeddings, [face_img]) for face_img in face_images]
+        )
+        embeddings = np.array([embedding[0] for embedding in embeddings])
+
+        # Step 6: Recognize faces
+        recognized_students = recognize_faces_batch(embeddings, class_embeddings)
+
+        # Step 7: Annotate the image with recognized students
+        annotated_image = image.copy()
+        for (face_img, bbox), recognized_student in zip(faces, recognized_students):
+            x1, y1, x2, y2 = bbox
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = recognized_student if recognized_student != "Unknown" else "Unknown"
+            cv2.putText(annotated_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
+
+        # Step 8: Save the annotated image
+        annotated_image_filename = f"annotated_{file.filename}"
+        annotated_image_path = os.path.join(attendance_static_dir, annotated_image_filename)
+        compression_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
+        await asyncio.to_thread(cv2.imwrite, annotated_image_path, annotated_image, compression_params)
+
+
+        # Get the instructor email from the JWT token
+        instructor_email = get_current_user(token)
+
+        # Step 9: Generate the Excel attendance file
+        current_datetime = datetime.now()
+        formatted_datetime = current_datetime.strftime("%Y-%m-%d")
+        attendance_file_path = generate_attendance_excel(formatted_datetime, recognized_students, class_path, instructor_email,f"{class_}_{batch_number}-{program}")
+
+        total_time_taken = time.time() - start_time
+
+        return {
+            "message": "Attendance marked successfully",
+            "recognized_students": recognized_students,
+            "annotated_image_url": f"/static/{annotated_image_filename}",
+            "attendance_file_url": f"/static/attendance/{os.path.basename(attendance_file_path)}",
+            "attendance_meta": formatted_datetime,
+            "total_time_taken": total_time_taken
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    
+
+# def resize_image_aspect_ratio(image, max_width=4000, max_height=3000):
+#     """Resize the image to fit within a max width and height, maintaining aspect ratio."""
+#     height, width = image.shape[:2]
+#     scale_width = max_width / width
+#     scale_height = max_height / height
+#     scale_factor = min(scale_width, scale_height)
+#     new_width = int(width * scale_factor)
+#     new_height = int(height * scale_factor)
+
+#     save_path='resized/image_resized.jpg'
+
+#     resized_image =cv2.resize(image, (new_width, new_height))
+#      # Ensure the "resized" directory exists
+#     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    
+#     # Save the image to the specified path
+#     cv2.imwrite(save_path, resized_image)
+
+#     return cv2.resize(image, (new_width, new_height))
 
 def extract_faces(image):
     """Extract faces from the uploaded image using MTCNN."""
-    faces = mtcnn.detect_faces(image)
-    extracted_faces = [(image[y:y+h, x:x+w], (x, y, x+w, y+h)) for x, y, w, h in [face['box'] for face in faces]]
-    return extracted_faces
+    print(image.shape)  # Should print something like (H, W, 3)
+        # Attempt to detect faces and handle any errors gracefully
+    try:
+        # Detect faces using MTCNN
+        faces = mtcnn.detect_faces(image)
+
+        print("crossed faces")
+
+        # Check if faces were detected
+        if not faces:
+            print("No faces detected.")
+            return []
+
+        # Extract faces and bounding boxes
+        extracted_faces = []
+        for face in faces:
+            x, y, w, h = face['box']
+            # Crop the face region from the image
+            cropped_face = image[y:y+h, x:x+w]
+            extracted_faces.append((cropped_face, (x, y, x+w, y+h)))
+
+        return extracted_faces
+
+    except Exception as e:
+        # Catch any exception (e.g., shape mismatches) and return empty list
+        print(f"Error during face detection: {e}")
+        return []
 
 def recognize_faces(embedding, class_embeddings, threshold=0.92):
     """Compare the face embedding with class embeddings and return recognized student ID."""
@@ -451,6 +676,14 @@ def process_face(face_img, class_embeddings):
     embedding = facenet.embeddings([face_img])[0]
     recognized_student = recognize_faces(embedding, class_embeddings)
     return recognized_student
+
+
+
+# Function to check if the string is a valid email
+def is_valid_email(user: str) -> bool:
+    email_regex = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+    return re.match(email_regex, user) is not None
+
 
 async def run_in_executor(func, *args):
     """Run CPU-bound function in a separate thread."""
@@ -474,104 +707,82 @@ def recognize_faces_batch(embeddings, class_embeddings, threshold=0.92):
             results.append("Unknown")
     return results
 
-import time
+# Helper function to extract student roll numbers
+def get_student_roll_numbers(class_path: str):
+    student_folders = os.listdir(class_path)
+    return [folder for folder in student_folders if os.path.isdir(os.path.join(class_path, folder))]
 
-@app.post("/mark-attendance")
-async def mark_attendance(
-    dept: str = Form(...),
-    program: str = Form(...),
-    sem: str = Form(...),
-    class_: str = Form(...),
-    batch_number: str = Form(...),
-    file: UploadFile = File(...),
-):
+# Helper function to generate Excel attendance sheet
+
+def generate_attendance_excel(date: str, recognized_students: List[str], class_path: str, instructor_email: str, courseFolder: str):
     try:
-        print(program)
-        print(batch_number)
-        start_time = time.time()  # Start tracking total execution time
+        # File paths for attendance files
+        base_path = f"storage/UsersData/{instructor_email}/{courseFolder}"
+        attendance_file_path = os.path.join(base_path,"main.xlsx")
+        daily_file_path = os.path.join(base_path, f"{date}.xlsx")
 
-        # Step 1: Read uploaded file
-        step_start_time = time.time()
-        file_data = await file.read()
-        image = await read_and_decode_file(file_data)
-        logger.info(f"Step 1: File read and decode time: {time.time() - step_start_time:.2f} seconds")
+        # Ensure the course folder exists
+        os.makedirs(base_path, exist_ok=True)
 
-        # Step 2: Resize image
-        step_start_time = time.time()
-        image = resize_image_aspect_ratio(image)
-        logger.info(f"Step 2: Image resizing time: {time.time() - step_start_time:.2f} seconds")
+        # Get the student roll numbers
+        roll_numbers = get_student_roll_numbers(class_path)
 
-        # Step 3: Load class embeddings
-        step_start_time = time.time()
-        batch_embeddings_path = f"{BASE_DIR}/batches/{batch_number}/{program}/batch_embeddings.pkl"
-        if not os.path.exists(batch_embeddings_path):
-            logger.error(f"No embeddings found for this class: {batch_embeddings_path}")
-            return {"message": "No embeddings found for this class"}
+        # Update or create the main attendance file
+        if os.path.exists(attendance_file_path):
+            # Load existing main attendance file
+            df_main = pd.read_excel(attendance_file_path, index_col=0)
+        else:
+            # Create a new DataFrame with roll numbers as the index
+            df_main = pd.DataFrame(index=roll_numbers)
 
-        with open(batch_embeddings_path, "rb") as f:
-            class_embeddings = pickle.load(f)
-        logger.info(f"Step 3: Embeddings load time: {time.time() - step_start_time:.2f} seconds")
+        df_main.index = df_main.index.astype(str)
 
-        # Step 4: Extract faces from the image
-        step_start_time = time.time()
-        faces = await run_in_executor(extract_faces, image)
-        logger.info(f"Step 4: Face extraction time: {time.time() - step_start_time:.2f} seconds")
+        # Check roll numbers and column alignment
+        print("Roll numbers (index of main.xlsx):", df_main.index.tolist())
+        print("Recognized students:", recognized_students)
 
-        if not faces:
-            logger.warning("No faces detected in the group photo")
-            return {"message": "No faces detected in the group photo"}
+        # Add the new date column to the main file if not already present
+        if date not in df_main.columns:
+            print(f"Adding column for date {date}")
+            df_main[date] = 'A'  # Default to Absent ('A')
 
-        # Step 5: Generate embeddings in parallel
-        step_start_time = time.time()
-        face_images = [face_img for face_img, _ in faces]
+        # Mark recognized students as Present ('P') in the main file
+        for roll_number in recognized_students:
+            if roll_number in df_main.index:
+                print(f"Marking {roll_number} as present in main.xlsx")
+                df_main.at[roll_number, date] = 'P'
+            else:
+                print(f"Roll number {roll_number} not found in main.xlsx")
 
-        embeddings = await asyncio.gather(
-            *[run_in_executor(facenet.embeddings, [face_img]) for face_img in face_images]
-        )
-        embeddings = np.array([embedding[0] for embedding in embeddings])
-        logger.info(f"Step 5: Embedding generation time: {time.time() - step_start_time:.2f} seconds")
+        # Save the updated main DataFrame back to Excel
+        print("Saving main.xlsx...")
+        df_main.to_excel(attendance_file_path)
 
-        # Step 6: Recognize faces
-        step_start_time = time.time()
-        recognized_students = recognize_faces_batch(embeddings, class_embeddings)
-        logger.info(f"Step 6: Face recognition time: {time.time() - step_start_time:.2f} seconds")
+        # Save the updated main DataFrame back to Excel
+        df_main.to_excel(attendance_file_path)
 
-        # Step 7: Annotate image with results
-        step_start_time = time.time()
-        annotated_image = image.copy()
-        for (face_img, bbox), recognized_student in zip(faces, recognized_students):
-            x1, y1, x2, y2 = bbox
-            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = recognized_student if recognized_student != "Unknown" else "Unknown"
-            cv2.putText(annotated_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
-        logger.info(f"Step 7: Image annotation time: {time.time() - step_start_time:.2f} seconds")
+        # Create a new DataFrame for the daily attendance file
+        df_daily = pd.DataFrame(index=roll_numbers)
+        df_daily.index = df_daily.index.astype(str)
 
-        # Step 8: Save annotated image
-        step_start_time = time.time()
-        annotated_image_filename = f"annotated_{file.filename}"
-        annotated_image_path = os.path.join(attendance_static_dir, annotated_image_filename)
-        compression_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
-        await asyncio.to_thread(cv2.imwrite, annotated_image_path, annotated_image, compression_params)
-        logger.info(f"Step 8: Save annotated image time: {time.time() - step_start_time:.2f} seconds")
+        df_daily[date] = 'A'  # Default to Absent ('A')
 
-        # Step 9: Generate attendance timestamp
-        step_start_time = time.time()
-        current_datetime = datetime.now()
-        formatted_datetime = current_datetime.strftime("%Y-%m-%d %I:%M %p")
-        attendance_meta = f"{formatted_datetime}"
-        logger.info(f"Step 9: Timestamp generation time: {time.time() - step_start_time:.2f} seconds")
+        # Mark recognized students as Present ('P') in the daily file
+        for roll_number in recognized_students:
+            if roll_number in df_daily.index:
+                print(f"Marking {roll_number} as present")  # Debugging statement
+                df_daily.at[roll_number, date] = 'P'
 
-        # Final logging and response
-        total_time_taken = time.time() - start_time
-        logger.info(f"Total time taken for the entire process: {total_time_taken:.2f} seconds")
+        # Save the daily DataFrame to a separate file
+        df_daily.to_excel(daily_file_path)
 
-        return {
-            "message": "Attendance marked successfully",
-            "recognized_students": recognized_students,
-            "annotated_image_url": f"/static/{annotated_image_filename}",
-            "attendance_meta": attendance_meta
-        }
+        return attendance_file_path
+          
 
     except Exception as e:
-        logger.error(f"Error during attendance marking: {e}")
-        return {"error": str(e)}
+        print(f"Error generating attendance Excel file: {e}")
+        raise
+
+
+
+

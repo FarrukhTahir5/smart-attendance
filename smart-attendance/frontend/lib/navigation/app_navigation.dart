@@ -12,6 +12,7 @@ class AppNavigation extends StatefulWidget {
 
 class _AppNavigationState extends State<AppNavigation> {
   int _selectedIndex = 0;
+  late PageController _pageController;
 
   final List<Widget> _pages = const [
     HomePage(),
@@ -19,16 +20,49 @@ class _AppNavigationState extends State<AppNavigation> {
     AddCoursePage(),
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(initialPage: _selectedIndex);
+  }
+
   void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.ease,
+    );
+  }
+
+  void _onPageChanged(int index) {
     setState(() {
       _selectedIndex = index;
     });
   }
 
+  // Handle back navigation using PopScope
+  void _onPopInvoked(bool canPop) {
+    if (_selectedIndex == 2 && canPop) {
+      setState(() {
+        _selectedIndex = 0; // Navigate to My Courses (index 0)
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_selectedIndex],
+      body: PopScope(
+        onPopInvoked: _onPopInvoked, // Handle pop invoked event
+        child: PageView(
+          controller: _pageController,
+          onPageChanged: _onPageChanged,
+          children: _pages,
+        ),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: _onItemTapped,
@@ -46,5 +80,11 @@ class _AppNavigationState extends State<AppNavigation> {
         ],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 }
