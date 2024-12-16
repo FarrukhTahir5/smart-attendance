@@ -60,6 +60,7 @@ class _PreviewAttendancePageState extends State<PreviewAttendancePage> {
                 content:
                     Text('No Faces Found Take A Proper Image & Try Again!')),
           );
+          Navigator.pop(context);
         }
         print(response.data);
         final annotatedImagePath =

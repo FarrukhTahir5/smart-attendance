@@ -93,15 +93,30 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
             provider.ipAddress + '/register', // Update with your API endpoint
             data: formData,
           );
-
+          if (response.data['message'] == "800") {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text("No Faces Detected Try Again!"),
+              backgroundColor: Colors.red,
+            ));
+            widget.onRegisterComplete();
+            setState(() {
+              isLoading = false; // Hide loading indicator when done
+            });
+            return;
+          }
           // Check the response status code
           if (response.statusCode == 200) {
             final responseData = response.data;
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(responseData['message']),
-                backgroundColor: Colors.green,
-              ),
+              responseData['message'] != "800"
+                  ? SnackBar(
+                      content: Text(responseData['message']),
+                      backgroundColor: Colors.green,
+                    )
+                  : SnackBar(
+                      content: Text(responseData['Error: No Face Detected']),
+                      backgroundColor: Colors.red,
+                    ),
             );
 
             // Notify the parent widget that registration is complete
@@ -118,10 +133,9 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
         } catch (e) {
           widget.onRegisterComplete();
 
-          print(e);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Error occurred while registering student'),
+            SnackBar(
+              content: Text('Error: ${e.toString()}'),
               backgroundColor: Colors.red,
             ),
           );

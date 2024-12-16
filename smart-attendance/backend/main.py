@@ -481,10 +481,15 @@ async def register_student(
         # Detect faces and compute embeddings
         image = cv2.imread(file_path)
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        faces = mtcnn.detect_faces(image_rgb)
 
+        try:
+            faces = mtcnn.detect_faces(image_rgb)
+        except Exception as e:
+            return {"message":"800"}
+        
         if not faces:
-            return {"error": f"No face detected in {file.filename}"}
+            print("No Faces Detected")
+            return {"message":"800"}
 
         for face in faces:
             x, y, w, h = face["box"]
