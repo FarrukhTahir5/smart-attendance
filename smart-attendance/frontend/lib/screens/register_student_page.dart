@@ -81,7 +81,7 @@ class _RegisterStudentPageState extends State<RegisterStudentPage> {
             'name': _nameController.text,
             'rollno': _rollNoController.text,
             'batch_number': provider.selectedBatch! + provider.selectedProgram!,
-            'program': "ai",
+            'program': provider.selectedProgram!,
             'files': files, // Send a list of files
           });
 

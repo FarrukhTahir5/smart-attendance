@@ -52,6 +52,14 @@ class _PreviewAttendancePageState extends State<PreviewAttendancePage> {
         provider.ipAddress + '/mark-attendance',
         data: formData,
       );
+      if (response.data['message'] == "800") {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              backgroundColor: Colors.red,
+              content: Text('No Faces Found Take A Proper Image & Try Again!')),
+        );
+        Navigator.pop(context);
+      }
 
       if (response.statusCode == 200) {
         if (response.data['message'] == "800") {
