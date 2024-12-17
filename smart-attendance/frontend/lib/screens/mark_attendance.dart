@@ -11,9 +11,11 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart'; // Add image_picker package
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import './preview_attendance_page.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:math';
+import 'package:image/image.dart' as img;
 
 class MarkAttendancePage extends StatefulWidget {
   const MarkAttendancePage({super.key});
@@ -34,11 +36,17 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
   // To store past attendance fetched from the API
   List<AttendanceRecord> pastAttendances = [];
 
+  DeviceOrientation _currentOrientation = DeviceOrientation.portraitUp;
+
   @override
   void initState() {
     super.initState();
     _initializeCamera();
     _fetchExcelFiles(); // Fetch attendance data when page is initialized
+    // Listen to accelerometer data
+    accelerometerEvents.listen((AccelerometerEvent event) {
+      _checkOrientation(event);
+    });
   }
 
   // Function to fetch Excel files from the FastAPI endpoint
@@ -180,6 +188,59 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
     );
   }
 
+  void _checkOrientation(AccelerometerEvent event) {
+    double x = event.x;
+    double y = event.y;
+
+    // Check if device is in landscape mode (either left or right)
+    if (x.abs() > y.abs()) {
+      if (x > 0) {
+        setState(() {
+          _currentOrientation = DeviceOrientation.landscapeRight;
+          print('Landscape Right');
+        });
+      } else {
+        setState(() {
+          _currentOrientation = DeviceOrientation.landscapeLeft;
+          print('Landscape Left');
+        });
+      }
+    } else {
+      setState(() {
+        _currentOrientation = DeviceOrientation.portraitUp;
+      });
+    }
+  }
+
+  Future<File> _rotateImage(String imagePath) async {
+    // Read the image file
+    File imageFile = File(imagePath);
+    img.Image? image = img.decodeImage(await imageFile.readAsBytes());
+
+    if (image == null) {
+      return imageFile; // Return original if decoding fails
+    }
+
+    // Rotate the image based on current orientation
+    img.Image rotatedImage;
+    switch (_currentOrientation) {
+      case DeviceOrientation.landscapeLeft:
+        rotatedImage = img.copyRotate(image, 90);
+        break;
+      case DeviceOrientation.landscapeRight:
+        rotatedImage = img.copyRotate(image, -90);
+        break;
+      default:
+        return imageFile; // No rotation for portrait
+    }
+
+    // Save the rotated image
+    File rotatedFile = File(imagePath)
+      ..writeAsBytesSync(img.encodeJpg(rotatedImage));
+
+    return rotatedFile;
+  }
+
   Widget _buildCameraMode() {
     return FutureBuilder<void>(
       future: _initializeControllerFuture,
@@ -213,29 +274,17 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
                       FloatingActionButton(
                         onPressed: () async {
                           try {
-                            // Lock to landscape orientation before taking picture
-                            await SystemChrome.setPreferredOrientations([
-                              DeviceOrientation.landscapeLeft,
-                              DeviceOrientation.landscapeRight,
-                            ]);
-
                             await _initializeControllerFuture;
                             final image = await _controller!.takePicture();
-
-                            // Reset orientation after capturing
-                            await SystemChrome.setPreferredOrientations([
-                              DeviceOrientation.portraitUp,
-                              DeviceOrientation.portraitDown,
-                              DeviceOrientation.landscapeLeft,
-                              DeviceOrientation.landscapeRight,
-                            ]);
+                            // Rotate the image if necessary
+                            final rotatedImage = await _rotateImage(image.path);
 
                             if (mounted) {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) => PreviewAttendancePage(
-                                    imagePath: image.path,
+                                    imagePath: rotatedImage.path,
                                   ),
                                 ),
                               );
